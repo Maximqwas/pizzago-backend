@@ -1,0 +1,25 @@
+{
+  "name": "pizzagobackend",
+  "version": "0.0.1",
+  "description": "PizzaGo Back-end",
+  "repository": {
+    "type": "git",
+    "url": "PizzaGoBackend"
+  },
+  "license": "ISC",
+  "author": "Jayeer",
+  "type": "commonjs",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "devDependencies": {
+    "nodemon": "^3.1.10"
+  },
+  "dependencies": {
+    "express": "^5.1.0",
+    "pg": "^8.16.0",
+    "prisma": "^6.8.2",
+    "redis": "^5.1.0"
+  }
+}
