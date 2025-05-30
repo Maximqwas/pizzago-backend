@@ -8,72 +8,51 @@ datasource db {
 }
 
 model User {
-  id         Int      @id @default(autoincrement())
-  email      String?  @unique
-  password   String?  // Hashed password
-  createdAt  DateTime @default(now())
+  id        Int      @id @default(autoincrement())
+  email     String?  @unique
+  password  String? // Hashed password
+  createdAt DateTime @default(now())
 
-  carts      Cart[]
-  orders     Order[]
+  carts  Cart[]
+  orders Order[]
 }
 
 model Tag {
-  key         String     @id
+  key         String  @id
   name        String
   description String?
 
-  pizzas      PizzaTag[]
-}
-
-model PizzaTag {
-  pizzaId  Int
-  tagKey   String
-
-  pizza    Pizza   @relation(fields: [pizzaId], references: [id], onDelete: Cascade)
-  tag      Tag     @relation(fields: [tagKey], references: [key], onDelete: Cascade)
-
-  @@id([pizzaId, tagKey])
-  @@map("pizza_tag")
+  pizzas Pizza[] @relation("PizzaTags")
 }
 
 model Pizza {
-  id            Int      @id @default(autoincrement())
-  name          String
-  description   String?
-  price         Decimal  @db.Decimal(6, 2)
+  id          Int      @id @default(autoincrement())
+  name        String
+  description String?
+  price       Decimal  @db.Decimal(6, 2)
+  ingredients String[]
 
-  ingredients   PizzaIngredient[]
-  cartItems     CartItem[]
-  orderItems    OrderItem[]
-  tags          PizzaTag[]
-}
-
-model PizzaIngredient {
-  pizzaId     Int
-  ingredient  String
-
-  pizza       Pizza    @relation(fields: [pizzaId], references: [id], onDelete: Cascade)
-
-  @@id([pizzaId, ingredient])
-  @@map("pizza_ingredient")
+  tags      Tag[]       @relation("PizzaTags")
+  CartItem  CartItem[]
+  OrderItem OrderItem[]
 }
 
 model Cart {
-  id         Int      @id @default(autoincrement())
-  userId     Int?     // null = anonymous
-  createdAt  DateTime @default(now())
+  id        Int      @id @default(autoincrement())
+  userId    Int? // null = anonymous
+  createdAt DateTime @default(now())
 
-  user       User?    @relation(fields: [userId], references: [id])
-  items      CartItem[]
+  user  User?      @relation(fields: [userId], references: [id])
+  items CartItem[]
 }
 
 model CartItem {
-  cartId     Int
-  pizzaId    Int
-  quantity   Int
+  cartId   Int
+  pizzaId  Int
+  quantity Int
 
-  cart       Cart     @relation(fields: [cartId], references: [id], onDelete: Cascade)
-  pizza      Pizza    @relation(fields: [pizzaId], references: [id])
+  cart  Cart  @relation(fields: [cartId], references: [id], onDelete: Cascade)
+  pizza Pizza @relation(fields: [pizzaId], references: [id])
 
   @@id([cartId, pizzaId])
   @@map("cart_item")
@@ -85,27 +64,27 @@ enum OrderStatus {
 }
 
 model Order {
-  id         Int      @id @default(autoincrement())
-  userId     Int?
-  createdAt  DateTime @default(now())
-  status     OrderStatus @default(pending)
-  total      Decimal  @db.Decimal(6, 2)
+  id        Int         @id @default(autoincrement())
+  userId    Int?
+  createdAt DateTime    @default(now())
+  status    OrderStatus @default(pending)
+  total     Decimal     @db.Decimal(6, 2)
 
-  user       User?    @relation(fields: [userId], references: [id])
-  items      OrderItem[]
+  user  User?       @relation(fields: [userId], references: [id])
+  items OrderItem[]
 }
 
 model OrderItem {
-  orderId     Int
-  pizzaId     Int
+  orderId Int
+  pizzaId Int
 
-  name        String
-  unitPrice   Decimal  @db.Decimal(6, 2)
-  quantity    Int
-  totalPrice  Decimal  @db.Decimal(6, 2)
+  name       String
+  unitPrice  Decimal @db.Decimal(6, 2)
+  quantity   Int
+  totalPrice Decimal @db.Decimal(6, 2)
 
-  order       Order    @relation(fields: [orderId], references: [id], onDelete: Cascade)
-  pizza       Pizza?   @relation(fields: [pizzaId], references: [id])
+  order Order  @relation(fields: [orderId], references: [id], onDelete: Cascade)
+  pizza Pizza? @relation(fields: [pizzaId], references: [id])
 
   @@id([orderId, pizzaId])
   @@map("order_item")
