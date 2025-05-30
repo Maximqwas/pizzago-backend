@@ -136,6 +136,31 @@ app.get("/pizzas", async (req, res) => {
     });
 });
 
+app.get("/pizzas/:id", async (req, res) => {
+    const pizzaId = parseInt(req.params.id);
+    if (isNaN(pizzaId)) {
+        return res.status(400).json({ error: "Invalid pizza ID" });
+    }
+
+    const pizza = await prisma.pizza.findUnique({
+        where: { id: pizzaId },
+        include: { tags: { include: { tag: { select: { name: true } } } } } // Select tag names
+    });
+
+    if (!pizza) {
+        return res.status(404).json({ error: "Pizza not found" });
+    }
+
+    res.json({
+        id: pizza.id,
+        name: pizza.name,
+        tags: pizza.tags.map(tag => tag.tag.name),
+        ingredients: pizza.ingredients,
+        price: pizza.price,
+        description: pizza.description,
+    });
+});
+
 // Order routes
 // TODO
 
