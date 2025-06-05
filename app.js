@@ -1,6 +1,11 @@
 const express = require("express");
 const cors = require("cors");
 const prisma = require("./prisma.js");
+const crypto = require("crypto");
+const redisClient = require("./redis_client.js");
+
+const SESSION_LIFETIME = 60*60*24*3;
+const SESSION_PREFIX = "pizzago_session:";
 
 const app = express();
 
@@ -159,6 +164,135 @@ app.get("/pizzas/:id", async (req, res) => {
         price: pizza.price,
         description: pizza.description,
     });
+});
+
+// Cart routes
+function generateSessionId() {
+    return crypto.randomBytes(32).toString('base64url');
+}
+
+function sessionIdToRedisKey(sessionId) {
+    return `${SESSION_PREFIX}${sessionId}`;
+}
+
+async function createSession() {
+    const sessionId = generateSessionId();
+    const sessionData = {
+        id: sessionId,
+        createdAt: new Date(),
+        updatedAt: new Date(),
+        cart: {
+            items: [],
+            total: 0
+        }
+    };
+    await redisClient.set(sessionIdToRedisKey(sessionId), JSON.stringify(sessionData), 'EX', SESSION_LIFETIME); // Set expiration to 1 hour
+    return sessionData;
+}
+
+async function getExistingSession(sessionId) {
+    const sessionData = await redisClient.get(sessionId);
+    if (sessionData) {
+        return JSON.parse(sessionData);
+    }
+    return null;
+}
+
+async function getOrCreateSession(sessionId) {
+    if (!sessionId) {
+        return createSession();
+    }
+    const sessionData = await getExistingSession(sessionId);
+    if (sessionData) {
+        return sessionData;
+    }
+    return createSession();
+}
+
+async function getSessionForRequest(req, res) {
+    let sessionId = req?.cookies?.session;
+    if (!sessionId) {
+        sessionId = generateSessionId();
+        res.cookie('session', sessionId, { httpOnly: true, secure: true });
+    }
+    return getOrCreateSession(sessionId);
+}
+
+// This function takes internal cart info and transforms it to the format expected by the client
+function transformCartInfo(info) {
+    return info;
+}
+
+app.get("/cart", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+    res.json(transformCartInfo(session.cart));
+});
+
+app.post("/cart", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+    const { pizzaId, quantity } = req.body;
+
+    if (!pizzaId || isNaN(pizzaId) || !quantity || isNaN(quantity)) {
+        return res.status(400).json({ error: "Invalid pizza ID or quantity" });
+    }
+
+    const pizza = await prisma.pizza.findUnique({ where: { id: pizzaId } });
+    if (!pizza) {
+        return res.status(404).json({ error: "Pizza not found" });
+    }
+
+    // Add pizza to cart
+    const existingItem = session.cart.items.find(item => item.pizzaId === pizzaId);
+    if (existingItem) {
+        existingItem.quantity += quantity;
+    } else {
+        session.cart.items.push({ pizzaId, quantity });
+    }
+    session.cart.total += pizza.price * quantity;
+
+    // Update session in Redis
+    await redisClient.set(sessionIdToRedisKey(session.id), JSON.stringify(session), 'EX', SESSION_LIFETIME); // Set expiration to 1 hour
+
+    res.json(transformCartInfo(session.cart));
+});
+
+app.delete("/cart/:pizzaId", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+    const pizzaId = parseInt(req.params.pizzaId);
+
+    if (isNaN(pizzaId)) {
+        return res.status(400).json({ error: "Invalid pizza ID" });
+    }
+
+    const pizzaIndex = session.cart.items.findIndex(item => item.pizzaId === pizzaId);
+    if (pizzaIndex === -1) {
+        return res.status(404).json({ error: "Pizza not found in cart" });
+    }
+
+    const pizza = await prisma.pizza.findUnique({ where: { id: pizzaId } });
+    if (!pizza) {
+        return res.status(404).json({ error: "Pizza not found" });
+    }
+
+    // Remove pizza from cart
+    session.cart.total -= pizza.price * session.cart.items[pizzaIndex].quantity;
+    session.cart.items.splice(pizzaIndex, 1);
+
+    // Update session in Redis
+    await redisClient.set(sessionIdToRedisKey(session.id), JSON.stringify(session), 'EX', SESSION_LIFETIME);
+
+    res.json(transformCartInfo(session.cart));
+});
+
+app.delete("/cart", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+    session.cart.items = [];
+    session.cart.total = 0;
+
+    // Update session in Redis
+    await redisClient.set(sessionIdToRedisKey(session.id), JSON.stringify(session), 'EX', SESSION_LIFETIME);
+
+    res.json(transformCartInfo(session.cart));
 });
 
 // Order routes
