@@ -111,7 +111,7 @@ async function findPizzas(tagKeys, offset, limit) {
  * Get all pizzas
  * Supports search by tag and paging
 */
-app.get("/pizzas", async (req, res) => {
+app.get("/api/v1/pizzas", async (req, res) => {
     let tags = req.query.tags ? req.query.tags.split(",") : [];
     // Transform to lowercase and strip spaces if needed
     tags = tags.map(tag => tag.toLowerCase().trim());
@@ -141,7 +141,7 @@ app.get("/pizzas", async (req, res) => {
     });
 });
 
-app.get("/pizzas/:id", async (req, res) => {
+app.get("/api/v1/pizzas/:id", async (req, res) => {
     const pizzaId = parseInt(req.params.id);
     if (isNaN(pizzaId)) {
         return res.status(400).json({ error: "Invalid pizza ID" });
@@ -223,12 +223,12 @@ function transformCartInfo(info) {
     return info;
 }
 
-app.get("/cart", async (req, res) => {
+app.get("/api/v1/cart", async (req, res) => {
     const session = await getSessionForRequest(req, res);
     res.json(transformCartInfo(session.cart));
 });
 
-app.post("/cart", async (req, res) => {
+app.post("/api/v1/cart", async (req, res) => {
     const session = await getSessionForRequest(req, res);
     const { pizzaId, quantity } = req.body;
 
@@ -256,7 +256,7 @@ app.post("/cart", async (req, res) => {
     res.json(transformCartInfo(session.cart));
 });
 
-app.delete("/cart/:pizzaId", async (req, res) => {
+app.delete("/api/v1/cart/:pizzaId", async (req, res) => {
     const session = await getSessionForRequest(req, res);
     const pizzaId = parseInt(req.params.pizzaId);
 
@@ -284,7 +284,7 @@ app.delete("/cart/:pizzaId", async (req, res) => {
     res.json(transformCartInfo(session.cart));
 });
 
-app.delete("/cart", async (req, res) => {
+app.delete("/api/v1/cart", async (req, res) => {
     const session = await getSessionForRequest(req, res);
     session.cart.items = [];
     session.cart.total = 0;

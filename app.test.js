@@ -41,7 +41,7 @@ describe('GET /pizzas', () => {
         prisma.pizza.findMany.mockResolvedValue(mockPizzas);
         prisma.pizza.count.mockResolvedValue(2);
 
-        const res = await request(app).get('/pizzas');
+        const res = await request(app).get('/api/v1/pizzas');
 
         expect(res.statusCode).toBe(200);
         expect(res.body.total).toBe(2);
@@ -78,7 +78,7 @@ describe('GET /pizzas', () => {
         prisma.pizza.findMany.mockResolvedValue(mockPizzas);
         prisma.pizza.count.mockResolvedValue(1);
 
-        const res = await request(app).get('/pizzas?tags=vegetarian');
+        const res = await request(app).get('/api/v1/pizzas?tags=vegetarian');
 
         expect(res.statusCode).toBe(200);
         expect(res.body.total).toBe(1);
@@ -98,7 +98,7 @@ describe('GET /pizzas', () => {
         prisma.pizza.findMany.mockResolvedValue(mockPizzas);
         prisma.pizza.count.mockResolvedValue(10);
 
-        const res = await request(app).get('/pizzas?limit=1&page=2');
+        const res = await request(app).get('/api/v1/pizzas?limit=1&page=2');
 
         expect(res.statusCode).toBe(200);
         expect(res.body.limit).toBe(1);
@@ -107,7 +107,7 @@ describe('GET /pizzas', () => {
     });
 
     it('should return 400 for invalid limit', async () => {
-        const res = await request(app).get('/pizzas?limit=200');
+        const res = await request(app).get('/api/v1/pizzas?limit=200');
         expect(res.statusCode).toBe(400);
         expect(res.body.error).toMatch(/Limit must be between 0 and 100/);
     });
@@ -116,7 +116,7 @@ describe('GET /pizzas', () => {
         prisma.pizza.findMany.mockResolvedValue([]);
         prisma.pizza.count.mockResolvedValue(0);
 
-        const res = await request(app).get('/pizzas?tags=nonexistent');
+        const res = await request(app).get('/api/v1/pizzas?tags=nonexistent');
 
         expect(res.statusCode).toBe(200);
         expect(res.body.total).toBe(0);
@@ -142,7 +142,7 @@ describe('GET /pizzas', () => {
             };
             prisma.pizza.findUnique.mockResolvedValue(mockPizza);
 
-            const res = await request(app).get('/pizzas/5');
+            const res = await request(app).get('/api/v1/pizzas/5');
 
             expect(res.statusCode).toBe(200);
             expect(res.body).toEqual({
@@ -162,14 +162,14 @@ describe('GET /pizzas', () => {
         it('should return 404 if pizza not found', async () => {
             prisma.pizza.findUnique.mockResolvedValue(null);
 
-            const res = await request(app).get('/pizzas/999');
+            const res = await request(app).get('/api/v1/pizzas/999');
 
             expect(res.statusCode).toBe(404);
             expect(res.body.error).toMatch(/Pizza not found/);
         });
 
         it('should return 400 for invalid pizza id', async () => {
-            const res = await request(app).get('/pizzas/abc');
+            const res = await request(app).get('/api/v1/pizzas/abc');
 
             expect(res.statusCode).toBe(400);
             expect(res.body.error).toMatch(/Invalid pizza ID/);
@@ -214,7 +214,7 @@ describe('Cart routes', () => {
     describe('GET /cart', () => {
         it('should return an empty cart for a new session', async () => {
             redisClient.set.mockResolvedValue();
-            const res = await request(app).get('/cart');
+            const res = await request(app).get('/api/v1/cart');
             expect(res.statusCode).toBe(200);
             expect(res.body).toEqual({ items: [], total: 0 });
         });
@@ -225,7 +225,7 @@ describe('Cart routes', () => {
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
             const agent = request.agent(app);
             // Simulate cookie
-            const res = await agent.get('/cart').set('Cookie', [`session=${mockSessionId}`]);
+            const res = await agent.get('/api/v1/cart').set('Cookie', [`session=${mockSessionId}`]);
             expect(res.statusCode).toBe(200);
             expect(res.body).toEqual({ items: [{ pizzaId: 1, quantity: 2 }], total: 20 });
         });
@@ -236,7 +236,7 @@ describe('Cart routes', () => {
             prisma.pizza.findUnique.mockResolvedValue({ id: 1, price: 10 });
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
             const res = await request(app)
-                .post('/cart')
+                .post('/api/v1/cart')
                 .send({ pizzaId: 1, quantity: 2 });
             expect(res.statusCode).toBe(200);
             expect(res.body.items).toEqual([{ pizzaId: 1, quantity: 2 }]);
@@ -250,7 +250,7 @@ describe('Cart routes', () => {
             prisma.pizza.findUnique.mockResolvedValue({ id: 1, price: 10 });
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
             const res = await request(app)
-                .post('/cart')
+                .post('/api/v1/cart')
                 .send({ pizzaId: 1, quantity: 3 });
             expect(res.statusCode).toBe(200);
             expect(res.body.items).toEqual([{ pizzaId: 1, quantity: 4 }]);
@@ -259,7 +259,7 @@ describe('Cart routes', () => {
 
         it('should return 400 for invalid pizzaId or quantity', async () => {
             const res = await request(app)
-                .post('/cart')
+                .post('/api/v1/cart')
                 .send({ pizzaId: 'abc', quantity: 2 });
             expect(res.statusCode).toBe(400);
             expect(res.body.error).toMatch(/Invalid pizza ID or quantity/);
@@ -268,7 +268,7 @@ describe('Cart routes', () => {
         it('should return 404 if pizza does not exist', async () => {
             prisma.pizza.findUnique.mockResolvedValue(null);
             const res = await request(app)
-                .post('/cart')
+                .post('/api/v1/cart')
                 .send({ pizzaId: 999, quantity: 1 });
             expect(res.statusCode).toBe(404);
             expect(res.body.error).toMatch(/Pizza not found/);
@@ -281,14 +281,14 @@ describe('Cart routes', () => {
             mockSession.cart.total = 20;
             prisma.pizza.findUnique.mockResolvedValue({ id: 1, price: 10 });
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
-            const res = await request(app).delete('/cart/1');
+            const res = await request(app).delete('/api/v1/cart/1');
             expect(res.statusCode).toBe(200);
             expect(res.body.items).toEqual([]);
             expect(res.body.total).toBe(0);
         });
 
         it('should return 400 for invalid pizzaId', async () => {
-            const res = await request(app).delete('/cart/abc');
+            const res = await request(app).delete('/api/v1/cart/abc');
             expect(res.statusCode).toBe(400);
             expect(res.body.error).toMatch(/Invalid pizza ID/);
         });
@@ -296,7 +296,7 @@ describe('Cart routes', () => {
         it('should return 404 if pizza not in cart', async () => {
             mockSession.cart.items = [];
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
-            const res = await request(app).delete('/cart/2');
+            const res = await request(app).delete('/api/v1/cart/2');
             expect(res.statusCode).toBe(404);
             expect(res.body.error).toMatch(/Pizza not found in cart/);
         });
@@ -305,7 +305,7 @@ describe('Cart routes', () => {
             mockSession.cart.items = [{ pizzaId: 3, quantity: 1 }];
             prisma.pizza.findUnique.mockResolvedValue(null);
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
-            const res = await request(app).delete('/cart/3');
+            const res = await request(app).delete('/api/v1/cart/3');
             expect(res.statusCode).toBe(404);
             expect(res.body.error).toMatch(/Pizza not found/);
         });
@@ -316,7 +316,7 @@ describe('Cart routes', () => {
             mockSession.cart.items = [{ pizzaId: 1, quantity: 2 }];
             mockSession.cart.total = 20;
             redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
-            const res = await request(app).delete('/cart');
+            const res = await request(app).delete('/api/v1/cart');
             expect(res.statusCode).toBe(200);
             expect(res.body.items).toEqual([]);
             expect(res.body.total).toBe(0);
