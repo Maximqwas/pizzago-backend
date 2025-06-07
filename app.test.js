@@ -326,7 +326,6 @@ describe('Cart routes', () => {
 
     });
 });
-// --- AUTH ROUTES TESTS ---
 
 // Mock security and mail modules
 jest.mock('./security.js', () => ({
@@ -518,6 +517,167 @@ describe('Auth routes', () => {
             expect(res.statusCode).toBe(200);
             expect(res.body.message).toMatch(/Logged out successfully/);
             expect(redisClient.del).toHaveBeenCalled();
+        });
+    });
+});
+
+// --- ORDER ROUTES TESTS ---
+
+describe('Order routes', () => {
+    let mockSession;
+    let mockSessionId;
+
+    beforeEach(() => {
+        jest.clearAllMocks();
+        mockSessionId = 'mock-session-id';
+        mockSession = {
+            id: mockSessionId,
+            createdAt: new Date(),
+            updatedAt: new Date(),
+            cart: {
+                items: [],
+                total: 0
+            }
+        };
+        redisClient.get.mockResolvedValue(null);
+        redisClient.set.mockResolvedValue();
+    });
+
+    describe('POST /orders', () => {
+        it('should return 400 if cart is empty', async () => {
+            redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
+            const res = await request(app).post('/api/v1/orders');
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Cart is empty/);
+        });
+
+        it('should create an order and clear the cart', async () => {
+            mockSession.cart.items = [{ pizzaId: 1, quantity: 2 }];
+            mockSession.cart.total = 20;
+            redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
+            const createdAt = new Date();
+            const mockOrder = {
+                id: 101,
+                total: 20,
+                createdAt,
+                items: [{ pizzaId: 1, quantity: 2 }]
+            };
+            // Mock prisma.order.create
+            if (!prisma.order) prisma.order = {};
+            prisma.order.create = jest.fn().mockResolvedValue(mockOrder);
+
+            const res = await request(app).post('/api/v1/orders');
+            expect(res.statusCode).toBe(201);
+            expect(res.body.orderId).toBe(101);
+            expect(res.body.total).toBe(20);
+            expect(Array.isArray(res.body.items)).toBe(true);
+            expect(res.body.items).toEqual([{ pizzaId: 1, quantity: 2 }]);
+            expect(prisma.order.create).toHaveBeenCalledWith({
+                data: {
+                    sessionId: mockSessionId,
+                    items: { create: [{ pizzaId: 1, quantity: 2 }] },
+                    total: 20,
+                    createdAt: expect.any(Date),
+                }
+            });
+            expect(redisClient.set).toHaveBeenCalled();
+        });
+    });
+
+    describe('GET /orders', () => {
+        it('should return a list of orders for the session', async () => {
+            redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
+            const mockOrders = [
+                {
+                    id: 1,
+                    createdAt: new Date('2024-01-01T10:00:00Z'),
+                    total: 30,
+                    status: 'delivered',
+                    items: [{ pizzaId: 1, quantity: 2 }]
+                },
+                {
+                    id: 2,
+                    createdAt: new Date('2024-01-02T12:00:00Z'),
+                    total: 15,
+                    status: 'pending',
+                    items: [{ pizzaId: 2, quantity: 1 }]
+                }
+            ];
+            if (!prisma.order) prisma.order = {};
+            prisma.order.findMany = jest.fn().mockResolvedValue(mockOrders);
+
+            const res = await request(app).get('/api/v1/orders');
+            expect(res.statusCode).toBe(200);
+            expect(Array.isArray(res.body.orders)).toBe(true);
+            expect(res.body.orders.length).toBe(2);
+            expect(res.body.orders[0]).toHaveProperty('orderId');
+            expect(res.body.orders[0]).toHaveProperty('createdAt');
+            expect(res.body.orders[0]).toHaveProperty('total');
+            expect(res.body.orders[0]).toHaveProperty('status');
+            expect(res.body.orders[0]).toHaveProperty('items');
+            expect(prisma.order.findMany).toHaveBeenCalledWith({
+                where: { sessionId: mockSessionId },
+                include: { items: true },
+                orderBy: { createdAt: 'desc' }
+            });
+        });
+    });
+
+    describe('GET /orders/:id', () => {
+        it('should return 400 for invalid order id', async () => {
+            redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
+            const res = await request(app).get('/api/v1/orders/abc');
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Invalid order ID/);
+        });
+
+        it('should return 404 if order not found', async () => {
+            redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
+            if (!prisma.order) prisma.order = {};
+            prisma.order.findUnique = jest.fn().mockResolvedValue(null);
+            const res = await request(app).get('/api/v1/orders/999');
+            expect(res.statusCode).toBe(404);
+            expect(res.body.error).toMatch(/Order not found/);
+        });
+
+        it('should return order details for valid order', async () => {
+            redisClient.get.mockResolvedValueOnce(JSON.stringify(mockSession));
+            const mockOrder = {
+                id: 10,
+                createdAt: new Date('2024-01-03T15:00:00Z'),
+                status: 'delivered',
+                total: 25,
+                items: [
+                    {
+                        pizzaId: 1,
+                        quantity: 2,
+                        pizza: { name: 'Margherita', price: 6.5 }
+                    },
+                    {
+                        pizzaId: 2,
+                        quantity: 1,
+                        pizza: { name: 'Pepperoni', price: 12 }
+                    }
+                ]
+            };
+            if (!prisma.order) prisma.order = {};
+            prisma.order.findUnique = jest.fn().mockResolvedValue(mockOrder);
+
+            const res = await request(app).get('/api/v1/orders/10');
+            expect(res.statusCode).toBe(200);
+            expect(res.body.orderId).toBe(10);
+            expect(res.body.status).toBe('delivered');
+            expect(res.body.total).toBe(25);
+            expect(Array.isArray(res.body.items)).toBe(true);
+            expect(res.body.items[0]).toHaveProperty('pizzaId');
+            expect(res.body.items[0]).toHaveProperty('name');
+            expect(res.body.items[0]).toHaveProperty('quantity');
+            expect(res.body.items[0]).toHaveProperty('unitPrice');
+            expect(res.body.items[0]).toHaveProperty('totalPrice');
+            expect(prisma.order.findUnique).toHaveBeenCalledWith({
+                where: { id: 10, sessionId: mockSessionId },
+                include: { items: true }
+            });
         });
     });
 });

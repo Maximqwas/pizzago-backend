@@ -326,7 +326,174 @@ app.delete("/api/v1/cart", sessionMiddleware, async (req, res) => {
 });
 
 // Order routes
-// TODO
+app.post("/api/v1/orders", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+    if (session.cart.items.length === 0) {
+        return res.status(400).json({ error: "Cart is empty" });
+    }
+
+    // Create order in the database
+    const order = await prisma.order.create({
+        data: {
+            sessionId: session.id,
+            items: {
+                create: session.cart.items.map(item => ({
+                    pizzaId: item.pizzaId,
+                    quantity: item.quantity
+                }))
+            },
+            total: session.cart.total,
+            createdAt: new Date(),
+        }
+    });
+
+    // Clear the cart
+    session.cart.items = [];
+    session.cart.total = 0;
+
+    // Update session in Redis
+    await redisClient.set(sessionIdToRedisKey(session.id), JSON.stringify(session), 'EX', SESSION_LIFETIME);
+
+    res.status(201).json({
+        orderId: order.id,
+        total: order.total,
+        createdAt: order.createdAt,
+        items: order.items.map(item => ({
+            pizzaId: item.pizzaId,
+            quantity: item.quantity
+        }))
+    });
+});
+
+/*
+## 📘 **GET `/orders`**
+
+### 🔸 Description:
+
+Returns a list of the authenticated user’s past orders (most recent first).
+
+---
+
+### 🔸 Response Format:
+
+```json
+{
+  "orders": [
+    {
+      "orderId": 1001,
+      "createdAt": "2025-05-26T13:45:00Z",
+      "total": 24.99,
+      "status": "delivered"
+    }
+  ]
+}
+```
+
+|Field|Type|Format|Required|Description|
+|---|---|---|---|---|
+|`orders`|array|List of order summaries|**yes**|User’s past orders, most recent first|
+|`orderId`|integer|Unsigned integer|**yes**|Unique ID of the order|
+|`createdAt`|string|ISO 8601 datetime (UTC)|**yes**|When the order was placed|
+|`total`|float|2-digit precision|**yes**|Total price of that order|
+|`status`|string|`"pending"` / `"delivered"`|**yes**|Current status of the order|
+*/
+app.get("/api/v1/orders", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+
+    // Fetch orders for the session
+    const orders = await prisma.order.findMany({
+        where: { sessionId: session.id },
+        include: { items: true }, // Include order items
+        orderBy: { createdAt: 'desc' } // Most recent first
+    });
+
+    res.json({
+        orders: orders.map(order => ({
+            orderId: order.id,
+            createdAt: order.createdAt,
+            total: order.total,
+            status: order.status,
+            items: order.items.map(item => ({
+                pizzaId: item.pizzaId,
+                quantity: item.quantity
+            }))
+        }))
+    });
+});
+
+/*
+## 📘 **GET `/orders/:id`**
+
+### 🔸 Description:
+
+Fetch full details for a specific order placed by the current user.
+
+---
+
+### 🔸 Response Format:
+
+```json
+{
+  "orderId": 1001,
+  "createdAt": "2025-05-26T13:45:00Z",
+  "status": "delivered",
+  "items": [
+    {
+      "pizzaId": 1,
+      "name": "Margherita",
+      "quantity": 2,
+      "unitPrice": 6.50,
+      "totalPrice": 13.00
+    }
+  ],
+  "total": 24.99
+}
+```
+
+|Field|Type|Format|Required|Description|
+|---|---|---|---|---|
+|`orderId`|integer|Unsigned integer|**yes**|Unique order ID|
+|`createdAt`|string|ISO 8601 datetime (UTC)|**yes**|Timestamp of the order|
+|`status`|string|`"pending"` / `"delivered"`|**yes**|Current status|
+|`items`|array|List of pizza order items|**yes**|Items in the order|
+|`pizzaId`|integer|Unsigned integer|**yes**|ID of the pizza|
+|`name`|string|UTF-8, max 64 chars|**yes**|Name of the pizza|
+|`quantity`|integer|≥1|**yes**|Number of pizzas ordered|
+|`unitPrice`|float|2-digit precision|**yes**|Price per item at time of order|
+|`totalPrice`|float|2-digit precision|**yes**|unitPrice × quantity|
+|`total`|float|2-digit precision|**yes**|Final total of the entire order|
+*/
+app.get("/api/v1/orders/:id", async (req, res) => {
+    const session = await getSessionForRequest(req, res);
+    const orderId = parseInt(req.params.id);
+
+    if (isNaN(orderId)) {
+        return res.status(400).json({ error: "Invalid order ID" });
+    }
+
+    const order = await prisma.order.findUnique({
+        where: { id: orderId, sessionId: session.id },
+        include: { items: true } // Include order items
+    });
+
+    if (!order) {
+        return res.status(404).json({ error: "Order not found" });
+    }
+
+    res.json({
+        orderId: order.id,
+        createdAt: order.createdAt,
+        status: order.status,
+        total: order.total,
+        items: order.items.map(item => ({
+            pizzaId: item.pizzaId,
+            name: item.pizza.name, // Assuming pizza name is stored in the pizza relation
+            quantity: item.quantity,
+            unitPrice: item.pizza.price, // Assuming pizza price is stored in the pizza relation
+            totalPrice: item.quantity * item.pizza.price
+        }))
+    });
+});
 
 // IAM routes (auth, register, etc.)
 function isEmailRateLimited(email) {

@@ -9,6 +9,12 @@ services:
     networks:
       - internal
 
+  redis:
+    image: redis:alpine
+    restart: always
+    ports:
+      - "6379:6379"
+
   app:
     build: .
     restart: always
