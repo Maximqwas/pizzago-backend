@@ -1,4 +1,3 @@
-version: '3.8'
 services:
   db:
     image: postgres:alpine
@@ -7,6 +6,8 @@ services:
       - .env
     volumes:
       - db_data:/var/lib/postgresql/data
+    networks:
+      - internal
 
   redis:
     image: redis:alpine
@@ -23,11 +24,23 @@ services:
       - "80:3000"
     depends_on:
       - db
+    networks:
+      - internal
+      - public
+
+
+  redis:
+    image: redis:latest
+    networks:
+      - internal
 
 volumes:
   db_data:
     driver: local
 
 networks:
-  default:
-    driver: bridge
+  internal:
+    internal: true
+    name: internal_net
+  public:
+    name: public_net

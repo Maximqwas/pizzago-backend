@@ -2,6 +2,8 @@ const request = require('supertest');
 const app = require('./app');
 const prisma = require('./prisma.js');
 const redisClient = require('./redis_client.js');
+const security = require('./security.js');
+const { sendEmail } = require('./mail.js');
 
 // Mock prisma and its methods
 jest.mock('./prisma.js', () => {
@@ -324,6 +326,201 @@ describe('Cart routes', () => {
 
     });
 });
+
+// Mock security and mail modules
+jest.mock('./security.js', () => ({
+    hashPassword: jest.fn(() => 'hashed-password'),
+    verifyPassword: jest.fn(),
+    getSecureToken: jest.fn(() => 'secure-token'),
+}));
+jest.mock('./mail.js', () => ({
+    sendEmail: jest.fn(),
+}));
+
+
+describe('Auth routes', () => {
+    beforeEach(() => {
+        jest.clearAllMocks();
+    });
+
+    describe('POST /api/v1/auth/register', () => {
+        it('should return 400 if email or password is missing', async () => {
+            let res = await request(app).post('/api/v1/auth/register').send({ email: '', password: '' });
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Username and password are required/);
+
+            res = await request(app).post('/api/v1/auth/register').send({ email: 'a@b.com' });
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Username and password are required/);
+
+            res = await request(app).post('/api/v1/auth/register').send({ password: '123' });
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Username and password are required/);
+        });
+
+        it('should return 409 if user already exists', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue({ id: 1 }) };
+            const res = await request(app).post('/api/v1/auth/register').send({ email: 'test@x.com', password: '123' });
+            expect(res.statusCode).toBe(409);
+            expect(res.body.error).toMatch(/User already exists/);
+        });
+
+        it('should create user and send verification email', async () => {
+            prisma.user = {
+                findUnique: jest.fn().mockResolvedValue(null),
+                create: jest.fn().mockResolvedValue({ username: 'test@x.com' }),
+            };
+            prisma.emailVerification = {
+                create: jest.fn().mockResolvedValue({ token: 'secure-token' }),
+            };
+            const res = await request(app).post('/api/v1/auth/register').send({ email: 'test@x.com', password: '12345123' });
+            expect(res.statusCode).toBe(201);
+            expect(res.body.message).toMatch(/User created successfully/);
+            expect(prisma.user.create).toHaveBeenCalled();
+            expect(sendEmail).toHaveBeenCalledWith(
+                'test@x.com',
+                expect.stringContaining('Verify'),
+                expect.stringContaining('/api/v1/auth/verify?token=secure-token')
+            );
+        });
+    });
+
+    describe('POST /api/v1/auth/resend-verification', () => {
+        it('should return 400 if email is missing', async () => {
+            const res = await request(app).post('/api/v1/auth/resend-verification').send({});
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Email is required/);
+        });
+
+        it('should return 404 if user not found or already verified', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue(null) };
+            let res = await request(app).post('/api/v1/auth/resend-verification').send({ email: 'notfound@x.com' });
+            expect(res.statusCode).toBe(404);
+
+            prisma.user.findUnique.mockResolvedValue({ email: 'a@b.com', verified: true });
+            res = await request(app).post('/api/v1/auth/resend-verification').send({ email: 'a@b.com' });
+            expect(res.statusCode).toBe(404);
+        });
+
+        it('should return 429 if rate limited', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue({ email: 'a@b.com', verified: false }) };
+            redisClient.get.mockResolvedValue('1'); // Simulate rate limit
+            const res = await request(app).post('/api/v1/auth/resend-verification').send({ email: 'a@b.com' });
+            expect(res.statusCode).toBe(429);
+            expect(res.body.error).toMatch(/wait before requesting/);
+        });
+
+        it('should send verification email if not rate limited', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue({ email: 'a@b.com', verified: false }) };
+            redisClient.get.mockResolvedValue(null); // Not rate limited
+            redisClient.set.mockResolvedValue();
+            const res = await request(app).post('/api/v1/auth/resend-verification').send({ email: 'a@b.com' });
+            expect(res.statusCode).toBe(200);
+            expect(res.body.message).toMatch(/Verification email sent/);
+            expect(sendEmail).toHaveBeenCalledWith(
+                'a@b.com',
+                expect.stringContaining('Verify your account'),
+                expect.stringContaining('/api/v1/auth/verify?token=secure-token')
+            );
+        });
+    });
+
+    describe('GET /api/v1/auth/verify', () => {
+        it('should return 400 if token is missing', async () => {
+            const res = await request(app).get('/api/v1/auth/verify');
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Token is required/);
+        });
+
+        it('should return 404 if token is invalid', async () => {
+            prisma.user = { findFirst: jest.fn().mockResolvedValue(null) };
+            prisma.emailVerification = { findFirst: jest.fn().mockResolvedValue(null) };
+            const res = await request(app).get('/api/v1/auth/verify?token=badtoken');
+            expect(res.statusCode).toBe(404);
+            expect(res.body.error).toMatch(/Invalid or expired token/);
+        });
+
+        it('should verify user if token is valid', async () => {
+            prisma.user = {
+                findFirst: jest.fn().mockResolvedValue({ id: 1 }),
+                update: jest.fn().mockResolvedValue({}),
+                findUnique: jest.fn().mockResolvedValue({ id: 1, email: 'a@x.com', verified: false }),
+            };
+            prisma.emailVerification = {
+                findFirst: jest.fn().mockResolvedValue({ id: 1, userId: 1, token: 'secure-token' }),
+                delete: jest.fn().mockResolvedValue(),
+            };
+            const res = await request(app).get('/api/v1/auth/verify?token=secure-token');
+            expect(res.statusCode).toBe(200);
+            expect(res.body.message).toMatch(/Email verified successfully/);
+            expect(prisma.user.update).toHaveBeenCalledWith({
+                where: { id: 1 },
+                data: { verified: true }
+            });
+            expect(prisma.emailVerification.delete).toHaveBeenCalledWith({
+                where: { id: 1 }
+            });
+        });
+    });
+
+    describe('POST /api/v1/auth/login', () => {
+        it('should return 400 if email or password missing', async () => {
+            let res = await request(app).post('/api/v1/auth/login').send({ email: '', password: '' });
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/Email and password are required/);
+
+            res = await request(app).post('/api/v1/auth/login').send({ email: 'a@b.com' });
+            expect(res.statusCode).toBe(400);
+        });
+
+        it('should return 404 if user not found or not verified', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue(null) };
+            let res = await request(app).post('/api/v1/auth/login').send({ email: 'a@b.com', password: '123' });
+            expect(res.statusCode).toBe(404);
+
+            prisma.user.findUnique.mockResolvedValue({ id: 1, email: 'a@b.com', verified: false });
+            res = await request(app).post('/api/v1/auth/login').send({ email: 'a@b.com', password: '123' });
+            expect(res.statusCode).toBe(404);
+        });
+
+        it('should return 401 if password is invalid', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue({ id: 1, email: 'a@b.com', verified: true, password: 'hashed' }) };
+            security.verifyPassword.mockResolvedValue(false);
+            const res = await request(app).post('/api/v1/auth/login').send({ email: 'a@b.com', password: 'wrong' });
+            expect(res.statusCode).toBe(401);
+            expect(res.body.error).toMatch(/Invalid credentials/);
+        });
+
+        it('should login user and return user info', async () => {
+            prisma.user = { findUnique: jest.fn().mockResolvedValue({ id: 1, email: 'a@b.com', verified: true, password: 'hashed' }) };
+            security.verifyPassword.mockResolvedValue(true);
+            redisClient.get.mockResolvedValue(null);
+            redisClient.set.mockResolvedValue();
+            const res = await request(app).post('/api/v1/auth/login').send({ email: 'a@b.com', password: 'right' });
+            expect(res.statusCode).toBe(200);
+            expect(res.body.user).toEqual({ id: 1, email: 'a@b.com' });
+        });
+    });
+
+    describe('POST /api/v1/auth/logout', () => {
+        it('should return 400 if no session cookie', async () => {
+            const res = await request(app).post('/api/v1/auth/logout');
+            expect(res.statusCode).toBe(400);
+            expect(res.body.error).toMatch(/No session found/);
+        });
+
+        it('should clear session and cookie if session exists', async () => {
+            redisClient.del.mockResolvedValue();
+            const agent = request.agent(app);
+            // Simulate cookie
+            const res = await agent.post('/api/v1/auth/logout').set('Cookie', ['session=mock-session-id']);
+            expect(res.statusCode).toBe(200);
+            expect(res.body.message).toMatch(/Logged out successfully/);
+            expect(redisClient.del).toHaveBeenCalled();
+        });
+    });
+});
+
 // --- ORDER ROUTES TESTS ---
 
 describe('Order routes', () => {
