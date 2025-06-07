@@ -383,39 +383,6 @@ app.post("/api/v1/auth/register", sessionMiddleware, async (req, res) => {
     res.status(201).json({ message: "User created successfully. Please check your email to verify your account." });
 });
 
-/*
-## 📨 **POST `/auth/resend-verification`**
-
-#### 🔸 Description:
-
-Resends the verification link to a registered, unverified email.
-
----
-
-### 🔸 Request Body:
-
-```json
-{
-  "email": "user@example.com"
-}
-```
-
-### 🔸 Field Definitions:
-
-|Field|Type|Format|Required|Description|
-|---|---|---|---|---|
-|`email`|string|Valid email|**yes**|Email address to resend|
-
----
-
-### 🔸 Response Format
-
-```json
-{
-  "message": "Verification email sent."
-}
-```
-*/
 app.post("/api/v1/auth/resend-verification", sessionMiddleware, async (req, res) => {
     const { email } = req.body;
     if (!email) {
