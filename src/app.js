@@ -34,9 +34,9 @@ function sessionIdToRedisKey(sessionId) {
     return `${SESSION_PREFIX}${sessionId}`;
 }
 
-function constructSessionData(){
+function constructSessionData(sessionId){
     return {
-        id: null,
+        id: sessionId,
         createdAt: new Date(),
         updatedAt: new Date(),
         cart: {
@@ -47,15 +47,14 @@ function constructSessionData(){
     };
 }
 
-async function createSession() {
-    const sessionId = generateSessionId();
-    const sessionData = constructSessionData();
+async function createSession(sessionId) {
+    const sessionData = constructSessionData(sessionId);
     await redisClient.set(sessionIdToRedisKey(sessionId), JSON.stringify(sessionData), 'EX', SESSION_LIFETIME); // Set expiration to 1 hour
     return sessionData;
 }
 
 async function getExistingSession(sessionId) {
-    const sessionData = await redisClient.get(sessionId);
+    const sessionData = await redisClient.get(sessionIdToRedisKey(sessionId));
     if (sessionData) {
         return JSON.parse(sessionData);
     }
@@ -64,13 +63,13 @@ async function getExistingSession(sessionId) {
 
 async function getOrCreateSession(sessionId) {
     if (!sessionId) {
-        return createSession();
+        return createSession(sessionId);
     }
     const sessionData = await getExistingSession(sessionId);
     if (sessionData) {
         return sessionData;
     }
-    return createSession();
+    return createSession(sessionId);
 }
 
 async function getSessionForRequest(req, res) {
@@ -111,11 +110,11 @@ async function findPizzasWithSingleTag(tag, offset, limit) {
         where: {
             tags: {
                 some: {
-                    tagKey: { in: [tag,] }
+                    key: { in: [tag.toLowerCase(),] }
                 }
             }
         },
-        include: { tags: { include: { tag: { select: { name: true } } } } }, // Select tag names
+        include: { tags: { select: { name: true } } }, // Select tag names
         skip: offset,
         take: limit,
     });
@@ -123,7 +122,7 @@ async function findPizzasWithSingleTag(tag, offset, limit) {
         where: {
             tags: {
                 some: {
-                    tagKey: { in: [tag,] }
+                    key: tag.toLowerCase() // Ensure case-insensitive search
                 }
             }
         }
@@ -136,24 +135,31 @@ async function findPizzasWithSingleTag(tag, offset, limit) {
     });
 }
 
-async function findPizzasWithMultipleTags(tags, offset, limit) {
+async function findPizzasWithMultipleTags(tags, offset=0, limit=20) {
     // Raw SQL to find pizzas that have ALL specified tags
-    const keysSql = tagKeys.map(k => `'${k}'`).join(',');
-    const rawResult = await prisma.$queryRawUnsafe(`
-        SELECT pizza_id
-        FROM pizza_tag
-        WHERE tag_key IN (${keysSql})
-        GROUP BY pizza_id
-        HAVING COUNT(DISTINCT tag_key) = ${tagKeys.length}
-        ORDER BY pizza_id
-        LIMIT ? OFFSET ?
-    `, limit, offset);
 
-    const pizzaIds = rawResult.map(r => r.pizza_id);
+    // Ensure that tags are alhpanumeric and lowercase
+    tags = tags.map(tag => tag.toLowerCase().trim()).filter(tag => /^[a-z0-9]+$/.test(tag));
+    // Ensure that offset and limit are valid numbers
+    offset = parseInt(offset) || 0;
+    limit = parseInt(limit) || 20;
+
+    const keysSql = tags.map(k => `'${k}'`).join(',');
+    const rawResult = await prisma.$queryRawUnsafe(`
+        SELECT "A"
+        FROM "_PizzaTags"
+        WHERE "B" IN (${keysSql})
+        GROUP BY "A"
+        HAVING COUNT(DISTINCT "B") = ${tags.length}
+        ORDER BY "A"
+        LIMIT ${limit} OFFSET ${offset}
+    `);
+
+    const pizzaIds = rawResult.map(r => r.A);
 
     const pizzas = await prisma.pizza.findMany({
         where: { id: { in: pizzaIds } },
-        include: { tags: { include: { tag: { select: { name: true } } } } } // Select tag names
+        include: { tags: { select: { name: true } } }, // Select tag names
     });
 
     return {
@@ -203,7 +209,6 @@ app.get("/api/v1/pizzas", async (req, res) => {
     const offset = parseInt(req.query.page) || 0;
 
     if (limit < 0 || limit > 100) {
-        console.debug(`Invalid limit passed: ${limit}. You should pass a limit value between 0 and 100 inclusive. Omit this value to use default value - 20`);
         return res.status(400).json({ error: "Limit must be between 0 and 100" });
     }
 
@@ -262,7 +267,11 @@ app.get("/api/v1/cart", sessionMiddleware, async (req, res) => {
 });
 
 app.post("/api/v1/cart", sessionMiddleware, async (req, res) => {
-    const { pizzaId, quantity } = req.body;
+    if (!req.body || !req.body.pizzaId || !req.body.quantity) {
+        return res.status(400).json({ error: "Pizza ID and quantity are required" });
+    }
+    const pizzaId = parseInt(req.body.pizzaId);
+    const quantity = parseInt(req.body.quantity);
 
     if (!pizzaId || isNaN(pizzaId) || !quantity || isNaN(quantity)) {
         return res.status(400).json({ error: "Invalid pizza ID or quantity" });
@@ -326,37 +335,65 @@ app.delete("/api/v1/cart", sessionMiddleware, async (req, res) => {
 });
 
 // Order routes
-app.post("/api/v1/orders", async (req, res) => {
-    const session = await getSessionForRequest(req, res);
-    if (session.cart.items.length === 0) {
+app.post("/api/v1/orders", sessionMiddleware, async (req, res) => {
+    if (req.session.cart.items.length === 0) {
         return res.status(400).json({ error: "Cart is empty" });
     }
 
-    // Create order in the database
-    const order = await prisma.order.create({
-        data: {
-            sessionId: session.id,
-            items: {
-                create: session.cart.items.map(item => ({
-                    pizzaId: item.pizzaId,
-                    quantity: item.quantity
-                }))
-            },
-            total: session.cart.total,
-            createdAt: new Date(),
+    let pizzas = await prisma.pizza.findMany({
+        where: {
+            id: {
+                in: req.session.cart.items.map(item => item.pizzaId)
+            }
         }
     });
 
+    let cart_items = req.session.cart.items.map(item => {
+        const pizza = pizzas.find(p => p.id === item.pizzaId);
+        if (!pizza) {
+            console.log(`Pizza with ID ${item.pizzaId} not found in database`);
+            return res.status(404).json({ error: `Pizza with ID ${item.pizzaId} not found` });
+        }
+        return {
+            pizzaId: item.pizzaId,
+            quantity: item.quantity,
+            unitPrice: pizza.price, // Assuming price is stored in the pizza object
+            totalPrice: item.quantity * pizza.price // Calculate total price for the item
+        };
+    });
+
+    // Create order in the database
+    const orderData = {
+        sessionId: req.session.id,
+        items: {
+            create: cart_items.map(item => ({
+                pizzaId: item.pizzaId,
+                quantity: item.quantity,
+                unitPrice: item.unitPrice,
+                totalPrice: item.totalPrice
+            }))
+        },
+        total: req.session.cart.total,
+        createdAt: new Date(),
+    };
+    if (req.session.userId) {
+        orderData.userId = req.session.userId;
+    }
+    const order = await prisma.order.create({
+        data: orderData,
+        include: { items: true } // Include order items in the response
+    });
+
     // Clear the cart
-    session.cart.items = [];
-    session.cart.total = 0;
+    req.session.cart.items = [];
+    req.session.cart.total = 0;
 
     // Update session in Redis
-    await redisClient.set(sessionIdToRedisKey(session.id), JSON.stringify(session), 'EX', SESSION_LIFETIME);
+    await redisClient.set(sessionIdToRedisKey(req.session.id), JSON.stringify(req.session), 'EX', SESSION_LIFETIME);
 
     res.status(201).json({
         orderId: order.id,
-        total: order.total,
+        total: Number(order.total),
         createdAt: order.createdAt,
         items: order.items.map(item => ({
             pizzaId: item.pizzaId,
@@ -365,38 +402,6 @@ app.post("/api/v1/orders", async (req, res) => {
     });
 });
 
-/*
-## 📘 **GET `/orders`**
-
-### 🔸 Description:
-
-Returns a list of the authenticated user’s past orders (most recent first).
-
----
-
-### 🔸 Response Format:
-
-```json
-{
-  "orders": [
-    {
-      "orderId": 1001,
-      "createdAt": "2025-05-26T13:45:00Z",
-      "total": 24.99,
-      "status": "delivered"
-    }
-  ]
-}
-```
-
-|Field|Type|Format|Required|Description|
-|---|---|---|---|---|
-|`orders`|array|List of order summaries|**yes**|User’s past orders, most recent first|
-|`orderId`|integer|Unsigned integer|**yes**|Unique ID of the order|
-|`createdAt`|string|ISO 8601 datetime (UTC)|**yes**|When the order was placed|
-|`total`|float|2-digit precision|**yes**|Total price of that order|
-|`status`|string|`"pending"` / `"delivered"`|**yes**|Current status of the order|
-*/
 app.get("/api/v1/orders", async (req, res) => {
     const session = await getSessionForRequest(req, res);
 
@@ -421,48 +426,6 @@ app.get("/api/v1/orders", async (req, res) => {
     });
 });
 
-/*
-## 📘 **GET `/orders/:id`**
-
-### 🔸 Description:
-
-Fetch full details for a specific order placed by the current user.
-
----
-
-### 🔸 Response Format:
-
-```json
-{
-  "orderId": 1001,
-  "createdAt": "2025-05-26T13:45:00Z",
-  "status": "delivered",
-  "items": [
-    {
-      "pizzaId": 1,
-      "name": "Margherita",
-      "quantity": 2,
-      "unitPrice": 6.50,
-      "totalPrice": 13.00
-    }
-  ],
-  "total": 24.99
-}
-```
-
-|Field|Type|Format|Required|Description|
-|---|---|---|---|---|
-|`orderId`|integer|Unsigned integer|**yes**|Unique order ID|
-|`createdAt`|string|ISO 8601 datetime (UTC)|**yes**|Timestamp of the order|
-|`status`|string|`"pending"` / `"delivered"`|**yes**|Current status|
-|`items`|array|List of pizza order items|**yes**|Items in the order|
-|`pizzaId`|integer|Unsigned integer|**yes**|ID of the pizza|
-|`name`|string|UTF-8, max 64 chars|**yes**|Name of the pizza|
-|`quantity`|integer|≥1|**yes**|Number of pizzas ordered|
-|`unitPrice`|float|2-digit precision|**yes**|Price per item at time of order|
-|`totalPrice`|float|2-digit precision|**yes**|unitPrice × quantity|
-|`total`|float|2-digit precision|**yes**|Final total of the entire order|
-*/
 app.get("/api/v1/orders/:id", async (req, res) => {
     const session = await getSessionForRequest(req, res);
     const orderId = parseInt(req.params.id);
@@ -473,7 +436,13 @@ app.get("/api/v1/orders/:id", async (req, res) => {
 
     const order = await prisma.order.findUnique({
         where: { id: orderId, sessionId: session.id },
-        include: { items: true } // Include order items
+        include: { 
+            items: {
+                include: {
+                    pizza: true
+                }
+            }
+        }
     });
 
     if (!order) {
@@ -487,9 +456,9 @@ app.get("/api/v1/orders/:id", async (req, res) => {
         total: order.total,
         items: order.items.map(item => ({
             pizzaId: item.pizzaId,
-            name: item.pizza.name, // Assuming pizza name is stored in the pizza relation
+            name: item.pizza.name,
             quantity: item.quantity,
-            unitPrice: item.pizza.price, // Assuming pizza price is stored in the pizza relation
+            unitPrice: item.pizza.price,
             totalPrice: item.quantity * item.pizza.price
         }))
     });
@@ -508,10 +477,31 @@ function isEmailRateLimited(email) {
     });
 }
 
+function validateEmail(email) {
+    // Simple email validation regex
+    const re = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+    return re.test(String(email).toLowerCase());
+}
+
+function validatePassword(password) {
+    // Password must be at least 8 characters long
+    return password && password.length >= 8;
+}
+
 app.post("/api/v1/auth/register", sessionMiddleware, async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password) {
         return res.status(400).json({ error: "Username and password are required" });
+    }
+
+    // Validate email format
+    if (!validateEmail(email)) {
+        return res.status(400).json({ error: "Invalid email format" });
+    }
+
+    // Validate password strength
+    if (!validatePassword(password)) {
+        return res.status(400).json({ error: "Password must be at least 8 characters long" });
     }
 
     // Check if user already exists
@@ -582,7 +572,7 @@ app.get("/api/v1/auth/verify", async (req, res) => {
         return res.status(400).json({ error: "Token is required" });
     }
 
-    // Find user by token (this is a placeholder, you should implement your own logic)
+    // Find user by token
     const verificationRequest = await prisma.emailVerification.findFirst({
         where: { token: token }
     });
@@ -631,7 +621,7 @@ app.post("/api/v1/auth/login", async (req, res) => {
     // Generate session token (placeholder logic)
     const sessionToken = getSecureToken();
 
-    // Set session in Redis (optional, depending on your session management)
+    // Set session in Redis
     redisClient.get(sessionIdToRedisKey(sessionToken)).then(sessionData => {
         if (!sessionData) {
             sessionData = constructSessionData();
