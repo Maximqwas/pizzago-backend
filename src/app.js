@@ -138,7 +138,7 @@ async function findPizzasWithSingleTag(tag, offset, limit) {
 async function findPizzasWithMultipleTags(tags, offset=0, limit=20) {
     // Raw SQL to find pizzas that have ALL specified tags
 
-    // Ensure that tags are alhpanumeric and lowercase
+    // Ensure that tags are alphanumeric and lowercase
     tags = tags.map(tag => tag.toLowerCase().trim()).filter(tag => /^[a-z0-9]+$/.test(tag));
     // Ensure that offset and limit are valid numbers
     offset = parseInt(offset) || 0;
