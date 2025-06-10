@@ -1,3 +1,4 @@
+require("./instrument.js");
 const express = require("express");
 const cors = require("cors");
 const prisma = require("./prisma.js");
@@ -656,6 +657,12 @@ app.post("/api/v1/auth/logout", async (req, res) => {
     res.clearCookie('session');
 
     res.json({ message: "Logged out successfully." });
+});
+
+app.get("/api/v1/bug", (req, res) => {
+    // This endpoint is for testing purposes
+    // It will throw an error to test Sentry integration
+    throw new Error("This is a test bug!");
 });
 
 module.exports = app;
