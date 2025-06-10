@@ -14,6 +14,8 @@ services:
     restart: always
     ports:
       - "6379:6379"
+    networks:
+      - internal
 
   app:
     build: .
@@ -28,11 +30,6 @@ services:
       - internal
       - public
 
-
-  redis:
-    image: redis:latest
-    networks:
-      - internal
 
 volumes:
   db_data:

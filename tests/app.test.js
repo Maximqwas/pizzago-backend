@@ -1,12 +1,12 @@
 const request = require('supertest');
-const app = require('./app');
-const prisma = require('./prisma.js');
-const redisClient = require('./redis_client.js');
-const security = require('./security.js');
-const { sendEmail } = require('./mail.js');
+const app = require('../src/app');
+const prisma = require('../src/prisma.js');
+const redisClient = require('../src/redis_client.js');
+const security = require('../src/security.js');
+const { sendEmail } = require('../src/mail.js');
 
 // Mock prisma and its methods
-jest.mock('./prisma.js', () => {
+jest.mock('../src/prisma.js', () => {
     return {
         pizza: {
             findMany: jest.fn(),
@@ -183,7 +183,7 @@ describe('GET /pizzas', () => {
 // --- CART ROUTES TESTS ---
 
 // Mock redis
-jest.mock('./redis_client.js', () => {
+jest.mock('../src/redis_client.js', () => {
     return {
         set: jest.fn(),
         get: jest.fn(),
@@ -328,12 +328,12 @@ describe('Cart routes', () => {
 });
 
 // Mock security and mail modules
-jest.mock('./security.js', () => ({
+jest.mock('../src/security.js', () => ({
     hashPassword: jest.fn(() => 'hashed-password'),
     verifyPassword: jest.fn(),
     getSecureToken: jest.fn(() => 'secure-token'),
 }));
-jest.mock('./mail.js', () => ({
+jest.mock('../src/mail.js', () => ({
     sendEmail: jest.fn(),
 }));
 
@@ -360,7 +360,7 @@ describe('Auth routes', () => {
 
         it('should return 409 if user already exists', async () => {
             prisma.user = { findUnique: jest.fn().mockResolvedValue({ id: 1 }) };
-            const res = await request(app).post('/api/v1/auth/register').send({ email: 'test@x.com', password: '123' });
+            const res = await request(app).post('/api/v1/auth/register').send({ email: 'test@x.com', password: '12312312' });
             expect(res.statusCode).toBe(409);
             expect(res.body.error).toMatch(/User already exists/);
         });
@@ -565,6 +565,9 @@ describe('Order routes', () => {
             // Mock prisma.order.create
             if (!prisma.order) prisma.order = {};
             prisma.order.create = jest.fn().mockResolvedValue(mockOrder);
+            prisma.pizza.findMany = jest.fn().mockResolvedValue([
+                { id: 1, price: 10 }
+            ]);
 
             const res = await request(app).post('/api/v1/orders');
             expect(res.statusCode).toBe(201);
@@ -575,10 +578,11 @@ describe('Order routes', () => {
             expect(prisma.order.create).toHaveBeenCalledWith({
                 data: {
                     sessionId: mockSessionId,
-                    items: { create: [{ pizzaId: 1, quantity: 2 }] },
+                    items: { create: [{ pizzaId: 1, quantity: 2, unitPrice: 10, totalPrice: 20 }] },
                     total: 20,
                     createdAt: expect.any(Date),
-                }
+                },
+                include: { items: true }
             });
             expect(redisClient.set).toHaveBeenCalled();
         });
@@ -676,7 +680,7 @@ describe('Order routes', () => {
             expect(res.body.items[0]).toHaveProperty('totalPrice');
             expect(prisma.order.findUnique).toHaveBeenCalledWith({
                 where: { id: 10, sessionId: mockSessionId },
-                include: { items: true }
+                include: { items: { include: { "pizza": true } } }
             });
         });
     });

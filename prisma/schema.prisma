@@ -83,15 +83,15 @@ model Order {
   status    OrderStatus @default(pending)
   total     Decimal     @db.Decimal(6, 2)
 
-  user  User?       @relation(fields: [userId], references: [id])
-  items OrderItem[]
+  user      User?       @relation(fields: [userId], references: [id])
+  sessionId String?
+  items     OrderItem[]
 }
 
 model OrderItem {
   orderId Int
   pizzaId Int
 
-  name       String
   unitPrice  Decimal @db.Decimal(6, 2)
   quantity   Int
   totalPrice Decimal @db.Decimal(6, 2)
