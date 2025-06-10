@@ -22,6 +22,8 @@ services:
     restart: always
     env_file:
       - .env
+    environment:
+      - NODE_ENV=prod
     ports:
       - "80:3000"
     depends_on:
